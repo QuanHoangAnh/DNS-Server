@@ -5,6 +5,23 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
+// A record is a convenient, immutable data structure for holding our parsed header fields.
+public record DnsHeader(
+    ushort PacketId,
+    byte Flags,
+    ushort QuestionCount,
+    ushort AnswerCount,
+    ushort AuthorityCount,
+    ushort AdditionalCount
+)
+{
+    // Extracts the OPCODE from the flags byte.
+    public byte OpCode => (byte)((Flags >> 3) & 0b1111);
+
+    // Extracts the Recursion Desired (RD) bit from the flags byte.
+    public bool RecursionDesired => (Flags & 0b1) == 0b1;
+}
+
 public class DnsServer
 {
     public static void Main(string[] args)
@@ -37,29 +54,25 @@ public class DnsServer
                 // the sender's address information.
                 byte[] receivedBytes = udpClient.Receive(ref remoteEP);
 
-                // For this stage, we don't care about the content of the received packet,
-                // but it's good practice to log that we received something.
                 Console.WriteLine($"Received a packet from: {remoteEP}");
-                Console.WriteLine($"Packet size: {receivedBytes.Length} bytes");
 
-                // For this stage, the tester expects a hardcoded ID of 1234.
-                const ushort packetId = 1234;
+                // 1. Parse the header from the incoming query packet.
+                DnsHeader requestHeader = ParseHeader(receivedBytes);
+                Console.WriteLine($"Received Query with ID: {requestHeader.PacketId}, OpCode: {requestHeader.OpCode}");
+
+                // For now, we still respond to a hardcoded domain and IP.
                 const string domainName = "codecrafters.io";
                 var ipAddress = IPAddress.Parse("8.8.8.8");
 
-                // Build the header. We have 1 question and now 1 answer.
-                byte[] header = BuildHeader(packetId, qdcount: 1, ancount: 1);
+                // 2. Build the response header based on the parsed request header.
+                byte[] responseHeader = BuildResponseHeader(requestHeader);
 
-                // Build the question section.
-                byte[] question = BuildQuestion(domainName);
+                // 3. Build the question and answer sections as before.
+                byte[] questionSection = BuildQuestion(domainName);
+                byte[] answerSection = BuildAnswer(domainName, ipAddress);
 
-                // Build the answer section.
-                byte[] answer = BuildAnswer(domainName, ipAddress);
-
-                // Combine all parts to form the full DNS response packet.
-                byte[] responseBytes = header.Concat(question).Concat(answer).ToArray();
-
-                // Send the response back to the client.
+                // 4. Combine all parts and send the response.
+                byte[] responseBytes = responseHeader.Concat(questionSection).Concat(answerSection).ToArray();
                 udpClient.Send(responseBytes, responseBytes.Length, remoteEP);
                 Console.WriteLine($"Sent response for {domainName} -> {ipAddress}");
             }
@@ -72,46 +85,59 @@ public class DnsServer
     }
 
     /// <summary>
-    /// Builds a 12-byte DNS header.
+    /// Parses the 12-byte header from a DNS packet.
     /// </summary>
-    /// <param name="packetId">The 16-bit packet identifier.</param>
-    /// <param name="qdcount">Question Count.</param>
-    /// <param name="ancount">Answer Record Count.</param>
-    /// <returns>A 12-byte array representing the DNS header.</returns>
-    public static byte[] BuildHeader(ushort packetId, ushort qdcount = 0, ushort ancount = 0)
+    private static DnsHeader ParseHeader(byte[] buffer)
     {
-        // A DNS header is always 12 bytes long.
+        // Read big-endian ushorts from the buffer
+        ushort ReadBigEndianUshort(int offset) => (ushort)((buffer[offset] << 8) | buffer[offset + 1]);
+
+        return new DnsHeader(
+            PacketId: ReadBigEndianUshort(0),
+            Flags: buffer[2], // We only need the first flags byte for now
+            QuestionCount: ReadBigEndianUshort(4),
+            AnswerCount: ReadBigEndianUshort(6),
+            AuthorityCount: ReadBigEndianUshort(8),
+            AdditionalCount: ReadBigEndianUshort(10)
+        );
+    }
+
+    /// <summary>
+    /// Builds the response header based on the request header.
+    /// </summary>
+    private static byte[] BuildResponseHeader(DnsHeader requestHeader)
+    {
         var header = new byte[12];
 
-        // Bytes 0-1: Packet Identifier (ID)
-        // A random ID assigned by the query. The response must have the same ID.
-        // We need to store it in Big-Endian format (most significant byte first).
-        header[0] = (byte)(packetId >> 8); // Get the high byte
-        header[1] = (byte)packetId;        // Get the low byte
+        // Bytes 0-1: Copy the Packet ID from the request
+        header[0] = (byte)(requestHeader.PacketId >> 8);
+        header[1] = (byte)requestHeader.PacketId;
 
-        // Bytes 2-3: Flags
-        // This is a set of bitfields. We'll set them according to the spec.
-        //
-        // Byte 2: QR(1) OPCODE(0000) AA(0) TC(0) RD(0)  -> 10000000 -> 0x80
-        header[2] = 0b1000_0000; // QR = 1 (Response), RD = 0 (Recursion not desired)
+        // Byte 2: Set the flags
+        // QR=1 (Response), OpCode from request, AA=0, TC=0, RD from request
+        byte qr = 1;
+        byte opCode = requestHeader.OpCode;
+        byte aa = 0;
+        byte tc = 0;
+        byte rd = (byte)(requestHeader.RecursionDesired ? 1 : 0);
+        header[2] = (byte)((qr << 7) | (opCode << 3) | (aa << 2) | (tc << 1) | rd);
 
-        // Byte 3: RA(0) Z(000) RCODE(0000) -> 00000000 -> 0x00
-        header[3] = 0b0000_0000; // RA = 0 (Recursion not available), RCODE = 0 (No Error)
+        // Byte 3: Set the rest of the flags
+        // RA=0, Z=0, RCODE
+        byte ra = 0;
+        byte z = 0;
+        byte rCode = (requestHeader.OpCode == 0) ? (byte)0 : (byte)4; // 0=NoError, 4=NotImplemented
+        header[3] = (byte)((ra << 7) | (z << 4) | rCode);
 
-        // Bytes 4-5: Question Count (QDCOUNT)
-        // Set Question Count (QDCOUNT)
-        header[4] = (byte)(qdcount >> 8);
-        header[5] = (byte)qdcount;
+        // Bytes 4-5: Question Count (we will answer 1 question)
+        header[4] = 0;
+        header[5] = 1;
 
-        // Bytes 6-7: Answer Record Count (ANCOUNT)
-        // Set Answer Record Count (ANCOUNT)
-        header[6] = (byte)(ancount >> 8);
-        header[7] = (byte)ancount;
+        // Bytes 6-7: Answer Record Count (we will provide 1 answer)
+        header[6] = 0;
+        header[7] = 1;
 
-        // Bytes 8-9: Authority Record Count (NSCOUNT)
-        // NSCOUNT and ARCOUNT are 0 for this stage.
-        // header[8] to header[11] are already 0 by default.
-
+        // NSCOUNT and ARCOUNT are 0
         return header;
     }
 
