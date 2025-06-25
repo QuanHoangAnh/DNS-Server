@@ -22,6 +22,13 @@ public record DnsHeader(
     public bool RecursionDesired => (Flags & 0b1) == 0b1;
 }
 
+// Record to hold parsed DNS Question information
+public record DnsQuestion(
+    string Name,
+    ushort Type,
+    ushort Class
+);
+
 public class DnsServer
 {
     public static void Main(string[] args)
@@ -60,21 +67,21 @@ public class DnsServer
                 DnsHeader requestHeader = ParseHeader(receivedBytes);
                 Console.WriteLine($"Received Query with ID: {requestHeader.PacketId}, OpCode: {requestHeader.OpCode}");
 
-                // For now, we still respond to a hardcoded domain and IP.
-                const string domainName = "codecrafters.io";
+                // 2. Parse the question section. The question starts right after the 12-byte header.
+                (DnsQuestion requestQuestion, _) = ParseQuestion(receivedBytes, 12);
+                Console.WriteLine($"Received Query for: {requestQuestion.Name}");
+
+                // 3. Build the response.
+                // The IP address is still hardcoded, but the rest is dynamic.
                 var ipAddress = IPAddress.Parse("8.8.8.8");
 
-                // 2. Build the response header based on the parsed request header.
                 byte[] responseHeader = BuildResponseHeader(requestHeader);
+                byte[] responseQuestion = BuildQuestion(requestQuestion.Name);
+                byte[] responseAnswer = BuildAnswer(requestQuestion.Name, ipAddress);
 
-                // 3. Build the question and answer sections as before.
-                byte[] questionSection = BuildQuestion(domainName);
-                byte[] answerSection = BuildAnswer(domainName, ipAddress);
-
-                // 4. Combine all parts and send the response.
-                byte[] responseBytes = responseHeader.Concat(questionSection).Concat(answerSection).ToArray();
+                byte[] responseBytes = responseHeader.Concat(responseQuestion).Concat(responseAnswer).ToArray();
                 udpClient.Send(responseBytes, responseBytes.Length, remoteEP);
-                Console.WriteLine($"Sent response for {domainName} -> {ipAddress}");
+                Console.WriteLine($"Sent response for {requestQuestion.Name} -> {ipAddress}");
             }
             catch (Exception e)
             {
@@ -100,6 +107,41 @@ public class DnsServer
             AuthorityCount: ReadBigEndianUshort(8),
             AdditionalCount: ReadBigEndianUshort(10)
         );
+    }
+
+    /// <summary>
+    /// Parses the question section from a DNS packet buffer.
+    /// </summary>
+    /// <param name="buffer">The full packet byte array.</param>
+    /// <param name="offset">The starting position of the question section.</param>
+    /// <returns>A tuple containing the parsed DnsQuestion and the number of bytes read.</returns>
+    private static (DnsQuestion, int) ParseQuestion(byte[] buffer, int offset)
+    {
+        int initialOffset = offset;
+        var labels = new List<string>();
+
+        // Loop to read the domain name labels
+        while (buffer[offset] != 0)
+        {
+            byte length = buffer[offset];
+            offset++;
+            labels.Add(Encoding.ASCII.GetString(buffer, offset, length));
+            offset += length;
+        }
+        offset++; // Skip the null terminator byte
+
+        string domainName = string.Join('.', labels);
+
+        // Read Type and Class (2 bytes each)
+        ushort type = (ushort)((buffer[offset] << 8) | buffer[offset + 1]);
+        offset += 2;
+        ushort qclass = (ushort)((buffer[offset] << 8) | buffer[offset + 1]);
+        offset += 2;
+
+        var question = new DnsQuestion(domainName, type, qclass);
+        int bytesRead = offset - initialOffset;
+
+        return (question, bytesRead);
     }
 
     /// <summary>
@@ -129,13 +171,13 @@ public class DnsServer
         byte rCode = (requestHeader.OpCode == 0) ? (byte)0 : (byte)4; // 0=NoError, 4=NotImplemented
         header[3] = (byte)((ra << 7) | (z << 4) | rCode);
 
-        // Bytes 4-5: Question Count (we will answer 1 question)
-        header[4] = 0;
-        header[5] = 1;
+        // Bytes 4-5: Question Count (copy from request)
+        header[4] = (byte)(requestHeader.QuestionCount >> 8);
+        header[5] = (byte)requestHeader.QuestionCount;
 
-        // Bytes 6-7: Answer Record Count (we will provide 1 answer)
-        header[6] = 0;
-        header[7] = 1;
+        // Bytes 6-7: Answer Record Count (we will provide 1 answer per question)
+        header[6] = (byte)(requestHeader.QuestionCount >> 8);
+        header[7] = (byte)requestHeader.QuestionCount;
 
         // NSCOUNT and ARCOUNT are 0
         return header;
