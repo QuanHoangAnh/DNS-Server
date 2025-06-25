@@ -1,6 +1,8 @@
 ﻿// Program.cs
 
-// Import necessary namespaces for networking
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -33,6 +35,8 @@ public class DnsServer
 {
     public static void Main(string[] args)
     {
+
+
         // The port our DNS server will listen on, as specified by the challenge.
         const int port = 2053;
 
@@ -67,21 +71,35 @@ public class DnsServer
                 DnsHeader requestHeader = ParseHeader(receivedBytes);
                 Console.WriteLine($"Received Query with ID: {requestHeader.PacketId}, OpCode: {requestHeader.OpCode}");
 
-                // 2. Parse the question section. The question starts right after the 12-byte header.
-                (DnsQuestion requestQuestion, _) = ParseQuestion(receivedBytes, 12);
-                Console.WriteLine($"Received Query for: {requestQuestion.Name}");
+                // 2. Parse all questions from the packet
+                var questions = new List<DnsQuestion>();
+                int offset = 12; // Start after the header
+
+                for (int i = 0; i < requestHeader.QuestionCount; i++)
+                {
+                    (DnsQuestion question, int bytesRead) = ParseQuestion(receivedBytes, offset);
+                    questions.Add(question);
+                    offset += bytesRead;
+                    Console.WriteLine($"Parsed Question: {question.Name}");
+                }
 
                 // 3. Build the response.
-                // The IP address is still hardcoded, but the rest is dynamic.
                 var ipAddress = IPAddress.Parse("8.8.8.8");
+                byte[] responseHeader = BuildResponseHeader(requestHeader, (ushort)questions.Count);
 
-                byte[] responseHeader = BuildResponseHeader(requestHeader);
-                byte[] responseQuestion = BuildQuestion(requestQuestion.Name);
-                byte[] responseAnswer = BuildAnswer(requestQuestion.Name, ipAddress);
+                var responseBody = new List<byte>();
+                foreach (var q in questions)
+                {
+                    responseBody.AddRange(BuildQuestion(q.Name));
+                }
+                foreach (var q in questions)
+                {
+                    responseBody.AddRange(BuildAnswer(q.Name, ipAddress));
+                }
 
-                byte[] responseBytes = responseHeader.Concat(responseQuestion).Concat(responseAnswer).ToArray();
+                byte[] responseBytes = responseHeader.Concat(responseBody).ToArray();
                 udpClient.Send(responseBytes, responseBytes.Length, remoteEP);
-                Console.WriteLine($"Sent response for {requestQuestion.Name} -> {ipAddress}");
+                Console.WriteLine($"Sent {questions.Count} answer(s).");
             }
             catch (Exception e)
             {
@@ -89,6 +107,59 @@ public class DnsServer
                 Console.WriteLine($"An error occurred: {e.Message}");
             }
         }
+    }
+
+    /// <summary>
+    /// Decodes a DNS name from the buffer, handling compression pointers.
+    /// </summary>
+    /// <param name="buffer">The full packet byte array.</param>
+    /// <param name="offset">The starting position to decode from.</param>
+    /// <returns>A tuple containing the decoded name and the number of bytes consumed.</returns>
+    private static (string, int) DecodeDnsName(byte[] buffer, int offset)
+    {
+        var labels = new List<string>();
+        int initialOffset = offset;
+        int bytesRead = 0;
+        bool jumped = false;
+
+        while (buffer[offset] != 0)
+        {
+            byte lengthOrPointer = buffer[offset];
+
+            // Check if it's a pointer (first two bits are 11)
+            if ((lengthOrPointer & 0b1100_0000) == 0b1100_0000)
+            {
+                // It's a pointer
+                ushort pointerOffset = (ushort)(((lengthOrPointer & 0b0011_1111) << 8) | buffer[offset + 1]);
+                (string pointedName, _) = DecodeDnsName(buffer, pointerOffset);
+                labels.Add(pointedName);
+
+                if (!jumped)
+                {
+                    bytesRead += 2; // A pointer is 2 bytes long
+                }
+                jumped = true;
+                break; // After a jump, we are done with this name part
+            }
+            else
+            {
+                // It's a length byte
+                offset++;
+                labels.Add(Encoding.ASCII.GetString(buffer, offset, lengthOrPointer));
+                offset += lengthOrPointer;
+                if (!jumped)
+                {
+                    bytesRead = offset - initialOffset;
+                }
+            }
+        }
+
+        if (!jumped)
+        {
+            bytesRead++; // Account for the final null byte
+        }
+
+        return (string.Join('.', labels), bytesRead);
     }
 
     /// <summary>
@@ -117,37 +188,24 @@ public class DnsServer
     /// <returns>A tuple containing the parsed DnsQuestion and the number of bytes read.</returns>
     private static (DnsQuestion, int) ParseQuestion(byte[] buffer, int offset)
     {
-        int initialOffset = offset;
-        var labels = new List<string>();
+        (string domainName, int nameBytesRead) = DecodeDnsName(buffer, offset);
+        offset += nameBytesRead;
 
-        // Loop to read the domain name labels
-        while (buffer[offset] != 0)
-        {
-            byte length = buffer[offset];
-            offset++;
-            labels.Add(Encoding.ASCII.GetString(buffer, offset, length));
-            offset += length;
-        }
-        offset++; // Skip the null terminator byte
-
-        string domainName = string.Join('.', labels);
-
-        // Read Type and Class (2 bytes each)
         ushort type = (ushort)((buffer[offset] << 8) | buffer[offset + 1]);
         offset += 2;
         ushort qclass = (ushort)((buffer[offset] << 8) | buffer[offset + 1]);
         offset += 2;
 
         var question = new DnsQuestion(domainName, type, qclass);
-        int bytesRead = offset - initialOffset;
+        int totalBytesRead = nameBytesRead + 4; // 4 bytes for Type and Class
 
-        return (question, bytesRead);
+        return (question, totalBytesRead);
     }
 
     /// <summary>
     /// Builds the response header based on the request header.
     /// </summary>
-    private static byte[] BuildResponseHeader(DnsHeader requestHeader)
+    private static byte[] BuildResponseHeader(DnsHeader requestHeader, ushort answerCount)
     {
         var header = new byte[12];
 
@@ -175,9 +233,9 @@ public class DnsServer
         header[4] = (byte)(requestHeader.QuestionCount >> 8);
         header[5] = (byte)requestHeader.QuestionCount;
 
-        // Bytes 6-7: Answer Record Count (we will provide 1 answer per question)
-        header[6] = (byte)(requestHeader.QuestionCount >> 8);
-        header[7] = (byte)requestHeader.QuestionCount;
+        // Bytes 6-7: Answer Record Count
+        header[6] = (byte)(answerCount >> 8);
+        header[7] = (byte)answerCount;
 
         // NSCOUNT and ARCOUNT are 0
         return header;
