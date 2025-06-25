@@ -10,42 +10,13 @@
 
 ## About The Project
 
-This DNS server is a simple yet functional implementation that demonstrates the core concepts of the Domain Name System (DNS) protocol. Built as an educational project, it showcases how DNS queries are parsed, processed, and responded to at the protocol level.
-
-The server handles incoming DNS queries over UDP, parses the DNS packet structure including headers and questions, and responds with appropriate DNS answers. It includes support for DNS name compression (pointer handling) and follows RFC-compliant DNS packet formatting.
+The DNS server handles incoming DNS queries over UDP, parses the DNS packet structure including headers and questions, and responds with appropriate DNS answers. It includes support for DNS name compression (pointer handling) and follows RFC-compliant DNS packet formatting.
 
 ### Why This Project Exists
 
 - **Educational Purpose**: Understand the inner workings of DNS at the packet level
 - **Protocol Learning**: Hands-on experience with binary protocol parsing and network programming
-- **Foundation Building**: A starting point for more complex DNS server implementations
 - **Network Programming**: Demonstrates UDP socket programming in C#
-
-<details>
-  <summary>Table of Contents</summary>
-  <ol>
-    <li><a href="#about-the-project">About The Project</a></li>
-    <li><a href="#key-features">Key Features</a></li>
-    <li><a href="#built-with">Built With</a></li>
-    <li><a href="#getting-started">Getting Started</a></li>
-    <li><a href="#usage">Usage</a></li>
-    <li><a href="#dns-protocol-implementation">DNS Protocol Implementation</a></li>
-    <li><a href="#architecture">Architecture</a></li>
-    <li><a href="#contributing">Contributing</a></li>
-    <li><a href="#license">License</a></li>
-    <li><a href="#contact">Contact</a></li>
-  </ol>
-</details>
-
-## Key Features
-
-- ✨ **DNS Query Parsing**: Handles standard DNS query packets with proper header and question parsing
-- 🔄 **Name Compression Support**: Implements DNS name compression (pointer) handling for efficient packet processing
-- 🌐 **UDP Protocol**: Uses UDP sockets for fast, connectionless DNS communication
-- 📦 **A Record Responses**: Returns IPv4 address records for all queries (currently hardcoded to 8.8.8.8)
-- 🔍 **Multi-Question Support**: Can handle multiple questions in a single DNS packet
-- 🛡️ **Error Handling**: Robust error handling with proper DNS response codes
-- 📝 **Detailed Logging**: Console logging for debugging and monitoring DNS traffic
 
 ## Built With
 
@@ -160,10 +131,6 @@ The DNS server follows a simple, single-threaded architecture:
    - `BuildQuestion()`: Reconstructs question section for response
    - `BuildAnswer()`: Generates A record answers
 
-### Design Patterns Used
-- **Record Types**: Immutable data structures for DNS components
-- **Tuple Returns**: Methods return both parsed data and bytes consumed
-
 ## Running Tests
 
 Currently, this project doesn't include automated tests, but you can manually test the DNS server functionality:
@@ -207,28 +174,9 @@ The DNS server uses hardcoded configuration values that can be modified in the s
 
 To modify these values, edit the corresponding lines in `Program.cs` and rebuild the project.
 
-
-### Development Guidelines
-
-- Follow C# coding conventions and best practices
-- Add comprehensive comments for complex DNS protocol handling
-- Ensure error handling for all network operations
-- Test with various DNS query tools before submitting
-
 ## License
 
 Distributed under the MIT License. See `LICENSE` for more information.
-
-## Contact
-
-Project Link: [https://github.com/yourusername/DNS-Server](https://github.com/yourusername/DNS-Server)
-
-### Acknowledgements
-
-* [RFC 1035 - Domain Names Implementation and Specification](https://tools.ietf.org/html/rfc1035)
-* [Microsoft .NET Documentation](https://docs.microsoft.com/en-us/dotnet/)
-* [DNS Protocol Overview](https://www.cloudflare.com/learning/dns/what-is-dns/)
-* [Best README Template](https://github.com/othneildrew/Best-README-Template)
 
 <!-- MARKDOWN LINKS & IMAGES -->
 [.NET]: https://img.shields.io/badge/.NET-512BD4?style=for-the-badge&logo=dotnet&logoColor=white
