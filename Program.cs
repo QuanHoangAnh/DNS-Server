@@ -45,19 +45,23 @@ public class DnsServer
                 // For this stage, the tester expects a hardcoded ID of 1234.
                 const ushort packetId = 1234;
                 const string domainName = "codecrafters.io";
+                var ipAddress = IPAddress.Parse("8.8.8.8");
 
-                // Build the header. We now have 1 question.
-                byte[] header = BuildHeader(packetId, qdcount: 1);
+                // Build the header. We have 1 question and now 1 answer.
+                byte[] header = BuildHeader(packetId, qdcount: 1, ancount: 1);
 
                 // Build the question section.
                 byte[] question = BuildQuestion(domainName);
 
-                // Combine the header and question to form the full DNS response packet.
-                byte[] responseBytes = header.Concat(question).ToArray();
+                // Build the answer section.
+                byte[] answer = BuildAnswer(domainName, ipAddress);
+
+                // Combine all parts to form the full DNS response packet.
+                byte[] responseBytes = header.Concat(question).Concat(answer).ToArray();
 
                 // Send the response back to the client.
                 udpClient.Send(responseBytes, responseBytes.Length, remoteEP);
-                Console.WriteLine($"Sent response for domain: {domainName}");
+                Console.WriteLine($"Sent response for {domainName} -> {ipAddress}");
             }
             catch (Exception e)
             {
@@ -139,6 +143,49 @@ public class DnsServer
         // 3. Add the Query Class (1 for IN) in big-endian format.
         byteList.Add(0);
         byteList.Add(1);
+
+        return byteList.ToArray();
+    }
+
+    /// <summary>
+    /// Builds the answer section (a Resource Record) for a DNS packet.
+    /// </summary>
+    /// <param name="domainName">The domain name the answer is for.</param>
+    /// <param name="ipAddress">The IP address to include in the answer.</param>
+    /// <returns>A byte array representing the DNS answer section.</returns>
+    public static byte[] BuildAnswer(string domainName, IPAddress ipAddress)
+    {
+        var byteList = new List<byte>();
+
+        // 1. Encode the domain name (same as in the question)
+        string[] labels = domainName.Split('.');
+        foreach (string label in labels)
+        {
+            byteList.Add((byte)label.Length);
+            byteList.AddRange(Encoding.ASCII.GetBytes(label));
+        }
+        byteList.Add(0);
+
+        // 2. Add Type (A record = 1)
+        byteList.AddRange(new byte[] { 0, 1 });
+
+        // 3. Add Class (IN = 1)
+        byteList.AddRange(new byte[] { 0, 1 });
+
+        // 4. Add TTL (Time-To-Live). We'll use 60 seconds.
+        const int ttl = 60;
+        byteList.Add((byte)(ttl >> 24));
+        byteList.Add((byte)(ttl >> 16));
+        byteList.Add((byte)(ttl >> 8));
+        byteList.Add((byte)ttl);
+
+        // 5. Add RDLENGTH (Resource Data Length). For an IPv4 address, this is 4.
+        const short rdlength = 4;
+        byteList.Add((byte)(rdlength >> 8));
+        byteList.Add((byte)rdlength);
+
+        // 6. Add RDATA (Resource Data). The actual IP address bytes.
+        byteList.AddRange(ipAddress.GetAddressBytes());
 
         return byteList.ToArray();
     }
