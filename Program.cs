@@ -3,6 +3,7 @@
 // Import necessary namespaces for networking
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 
 public class DnsServer
 {
@@ -43,13 +44,20 @@ public class DnsServer
 
                 // For this stage, the tester expects a hardcoded ID of 1234.
                 const ushort packetId = 1234;
+                const string domainName = "codecrafters.io";
 
-                // Build the DNS header response.
-                byte[] responseBytes = BuildHeader(packetId);
+                // Build the header. We now have 1 question.
+                byte[] header = BuildHeader(packetId, qdcount: 1);
 
-                // Send the DNS header back to the client.
+                // Build the question section.
+                byte[] question = BuildQuestion(domainName);
+
+                // Combine the header and question to form the full DNS response packet.
+                byte[] responseBytes = header.Concat(question).ToArray();
+
+                // Send the response back to the client.
                 udpClient.Send(responseBytes, responseBytes.Length, remoteEP);
-                Console.WriteLine("Sent DNS Header response.");
+                Console.WriteLine($"Sent response for domain: {domainName}");
             }
             catch (Exception e)
             {
@@ -60,11 +68,13 @@ public class DnsServer
     }
 
     /// <summary>
-    /// Builds a 12-byte DNS header with hardcoded values for this stage.
+    /// Builds a 12-byte DNS header.
     /// </summary>
     /// <param name="packetId">The 16-bit packet identifier.</param>
+    /// <param name="qdcount">Question Count.</param>
+    /// <param name="ancount">Answer Record Count.</param>
     /// <returns>A 12-byte array representing the DNS header.</returns>
-    public static byte[] BuildHeader(ushort packetId)
+    public static byte[] BuildHeader(ushort packetId, ushort qdcount = 0, ushort ancount = 0)
     {
         // A DNS header is always 12 bytes long.
         var header = new byte[12];
@@ -85,25 +95,51 @@ public class DnsServer
         header[3] = 0b0000_0000; // RA = 0 (Recursion not available), RCODE = 0 (No Error)
 
         // Bytes 4-5: Question Count (QDCOUNT)
-        // For this stage, we have 0 questions.
-        header[4] = 0;
-        header[5] = 0;
+        // Set Question Count (QDCOUNT)
+        header[4] = (byte)(qdcount >> 8);
+        header[5] = (byte)qdcount;
 
         // Bytes 6-7: Answer Record Count (ANCOUNT)
-        // For this stage, we have 0 answers.
-        header[6] = 0;
-        header[7] = 0;
+        // Set Answer Record Count (ANCOUNT)
+        header[6] = (byte)(ancount >> 8);
+        header[7] = (byte)ancount;
 
         // Bytes 8-9: Authority Record Count (NSCOUNT)
-        // For this stage, we have 0 authority records.
-        header[8] = 0;
-        header[9] = 0;
-
-        // Bytes 10-11: Additional Record Count (ARCOUNT)
-        // For this stage, we have 0 additional records.
-        header[10] = 0;
-        header[11] = 0;
+        // NSCOUNT and ARCOUNT are 0 for this stage.
+        // header[8] to header[11] are already 0 by default.
 
         return header;
+    }
+
+    /// <summary>
+    /// Builds the question section of a DNS packet.
+    /// </summary>
+    /// <param name="domainName">The domain name to query (e.g., "codecrafters.io").</param>
+    /// <returns>A byte array representing the DNS question section.</returns>
+    public static byte[] BuildQuestion(string domainName)
+    {
+        var byteList = new List<byte>();
+
+        // 1. Encode the domain name into labels
+        string[] labels = domainName.Split('.');
+        foreach (string label in labels)
+        {
+            // Add the length of the label as a single byte.
+            byteList.Add((byte)label.Length);
+            // Add the ASCII bytes of the label itself.
+            byteList.AddRange(Encoding.ASCII.GetBytes(label));
+        }
+        // Terminate the domain name with a null byte.
+        byteList.Add(0);
+
+        // 2. Add the Query Type (1 for A record) in big-endian format.
+        byteList.Add(0);
+        byteList.Add(1);
+
+        // 3. Add the Query Class (1 for IN) in big-endian format.
+        byteList.Add(0);
+        byteList.Add(1);
+
+        return byteList.ToArray();
     }
 }
